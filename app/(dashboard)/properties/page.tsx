@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { usePropertyList } from '@/lib/hooks/useProperties'
+import { useQueryClient } from '@tanstack/react-query'
+import { PROPERTY_KEYS } from '@/lib/hooks/useProperties'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { EmptyState } from '@/components/layout/EmptyState'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +21,7 @@ import {
 import {
   Building2, Search, LayoutGrid, List, Download,
   Star, MapPin, AlertCircle, ChevronLeft, ChevronRight,
+  RefreshCw, Database,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { downloadExcel } from '@/lib/utils'
@@ -27,15 +30,14 @@ import Link from 'next/link'
 
 const PAGE_SIZE = 25
 
+// ── Sub-components ────────────────────────────────────────────────────────────
+
 function StarRating({ rating }: { rating?: number }) {
   const stars = Math.round(rating ?? 0)
   return (
     <span className="flex items-center gap-0.5">
       {Array.from({ length: 5 }).map((_, i) => (
-        <Star
-          key={i}
-          className={`h-3 w-3 ${i < stars ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/30'}`}
-        />
+        <Star key={i} className={`h-3 w-3 ${i < stars ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/30'}`} />
       ))}
     </span>
   )
@@ -43,8 +45,8 @@ function StarRating({ rating }: { rating?: number }) {
 
 function StatusBadge({ status }: { status?: string }) {
   const s = (status ?? '').toLowerCase()
-  if (['approved', 'active', 'enabled'].includes(s)) return <Badge variant="success">{status}</Badge>
-  if (['pending', 'review'].includes(s)) return <Badge variant="warning">{status}</Badge>
+  if (['approved', 'active', 'enabled'].includes(s))   return <Badge variant="success">{status}</Badge>
+  if (['pending', 'review'].includes(s))                return <Badge variant="warning">{status}</Badge>
   if (['rejected', 'disabled', 'inactive'].includes(s)) return <Badge variant="destructive">{status}</Badge>
   return <Badge variant="outline">{status ?? 'Unknown'}</Badge>
 }
@@ -116,10 +118,7 @@ function PropertyCardSkeleton() {
         </div>
         <Skeleton className="h-3 w-24" />
         <div className="grid grid-cols-2 gap-2">
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-full" />
-          <Skeleton className="h-3 w-full" />
+          {[1,2,3,4].map((i) => <Skeleton key={i} className="h-3 w-full" />)}
         </div>
         <Skeleton className="h-8 w-full" />
       </CardContent>
@@ -127,89 +126,112 @@ function PropertyCardSkeleton() {
   )
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 export default function PropertiesPage() {
   const router = useRouter()
-  const { data: rawData, isLoading, error, refetch } = usePropertyList()
+  const queryClient = useQueryClient()
 
-  // Hook now returns the unwrapped array directly
-  const properties: PropertyListItem[] = useMemo(
-    () => (Array.isArray(rawData) ? rawData : []),
-    [rawData]
-  )
-
-  const [search, setSearch] = useState('')
+  // Filter state
+  const [searchInput, setSearchInput] = useState('')  // raw input (debounced)
+  const [search, setSearch]           = useState('')  // debounced value sent to API
   const [statusFilter, setStatusFilter] = useState('all')
   const [countryFilter, setCountryFilter] = useState('all')
-  const [sortBy, setSortBy] = useState('name')
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid')
-  const [page, setPage] = useState(1)
+  const [sortBy, setSortBy]           = useState('name')
+  const [viewMode, setViewMode]       = useState<'grid' | 'table'>('grid')
+  const [page, setPage]               = useState(1)
+  const [exporting, setExporting]     = useState(false)
+  const [refreshing, setRefreshing]   = useState(false)
 
-  // Unique countries
-  const countries = useMemo(() => {
-    const set = new Set(properties.map((p) => p.countryCode).filter(Boolean))
-    return Array.from(set).sort() as string[]
-  }, [properties])
+  // Debounce search input — wait 400ms after user stops typing
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setSearch(searchInput)
+      setPage(1)
+    }, 400)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [searchInput])
 
-  // Filter + sort
-  const filtered = useMemo(() => {
-    let list = [...properties]
-    const q = search.toLowerCase().trim()
-    if (q) {
-      list = list.filter(
-        (p) =>
-          p.name?.toLowerCase().includes(q) ||
-          p.city?.toLowerCase().includes(q) ||
-          p.countryCode?.toLowerCase().includes(q) ||
-          String(p.id).includes(q)
+  // Reset to page 1 when filters change
+  const handleStatusChange  = (v: string) => { setStatusFilter(v);  setPage(1) }
+  const handleCountryChange = (v: string) => { setCountryFilter(v); setPage(1) }
+  const handleSortChange    = (v: string) => { setSortBy(v);        setPage(1) }
+
+  // Fetch — only 25 records returned (server-side pagination)
+  const { data: result, isLoading, isFetching, error } = usePropertyList({
+    page, pageSize: PAGE_SIZE, search, status: statusFilter, country: countryFilter, sort: sortBy,
+  })
+
+  const properties = result?.data ?? []
+  const meta       = result?.meta
+
+  // Countries come from the API (always the full list regardless of filter)
+  const countries = meta?.countries ?? []
+
+  // Manual refresh — force HyperGuest sync
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      await queryClient.invalidateQueries({ queryKey: PROPERTY_KEYS.all })
+      // Force a refresh fetch
+      const p = { page, pageSize: PAGE_SIZE, search, status: statusFilter, country: countryFilter, sort: sortBy, refresh: true }
+      await queryClient.fetchQuery({ queryKey: PROPERTY_KEYS.list(p), queryFn: () => fetch(`/api/properties?refresh=1`).then(r => r.json()) })
+      await queryClient.invalidateQueries({ queryKey: PROPERTY_KEYS.all })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [queryClient, page, search, statusFilter, countryFilter, sortBy])
+
+  // Export — fetch all filtered records in one shot (up to 500)
+  const handleExport = useCallback(async () => {
+    setExporting(true)
+    try {
+      const qs = new URLSearchParams({ pageSize: '500', search, sort: sortBy })
+      if (statusFilter !== 'all') qs.set('status', statusFilter)
+      if (countryFilter !== 'all') qs.set('country', countryFilter)
+      const res = await fetch(`/api/properties?${qs}`)
+      const json = await res.json() as { data?: PropertyListItem[] }
+      const all = Array.isArray(json.data) ? json.data : []
+      downloadExcel(
+        all.map((p) => ({
+          ID: p.id, Name: p.name, Rating: p.rating, Status: p.status,
+          Country: p.countryCode, City: p.city, Currency: p.currency,
+          CheckIn: p.checkIn, CheckOut: p.checkOut,
+        })),
+        'hyperguest-properties'
       )
+    } finally {
+      setExporting(false)
     }
-    if (statusFilter !== 'all') {
-      list = list.filter((p) => p.status?.toLowerCase() === statusFilter)
-    }
-    if (countryFilter !== 'all') {
-      list = list.filter((p) => p.countryCode === countryFilter)
-    }
-    list.sort((a, b) => {
-      if (sortBy === 'name') return (a.name ?? '').localeCompare(b.name ?? '')
-      if (sortBy === 'rating') return (b.rating ?? 0) - (a.rating ?? 0)
-      if (sortBy === 'status') return (a.status ?? '').localeCompare(b.status ?? '')
-      return 0
-    })
-    return list
-  }, [properties, search, statusFilter, countryFilter, sortBy])
+  }, [search, statusFilter, countryFilter, sortBy])
 
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
-
-  const handleExport = () => {
-    downloadExcel(
-      filtered.map((p) => ({
-        ID: p.id,
-        Name: p.name,
-        Rating: p.rating,
-        Status: p.status,
-        Country: p.countryCode,
-        City: p.city,
-        Currency: p.currency,
-        CheckIn: p.checkIn,
-        CheckOut: p.checkOut,
-      })),
-      'hyperguest-properties'
-    )
+  const clearFilters = () => {
+    setSearchInput(''); setSearch('')
+    setStatusFilter('all'); setCountryFilter('all')
+    setSortBy('name'); setPage(1)
   }
+
+  const total      = meta?.total ?? 0
+  const totalPages = meta?.totalPages ?? 1
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <PageHeader
-        title="Properties"
-        subtitle="Browse all HyperGuest properties"
-      >
-        <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
-          <Download className="h-4 w-4" />
+      <PageHeader title="Properties" subtitle="Browse all HyperGuest properties">
+        {/* Cache indicator */}
+        {meta?.fromCache && (
+          <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md px-2.5 py-1.5">
+            <Database className="h-3 w-3" />
+            <span>Served from cache</span>
+          </div>
+        )}
+        <Button variant="outline" size="sm" onClick={handleExport} disabled={total === 0 || exporting} className="gap-1.5">
+          {exporting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
           Export
         </Button>
-        <Button size="sm" onClick={() => refetch()}>
+        <Button size="sm" onClick={handleRefresh} disabled={refreshing} className="gap-1.5">
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
       </PageHeader>
@@ -218,11 +240,9 @@ export default function PropertiesPage() {
       {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
+          <AlertDescription className="flex items-center justify-between gap-4">
             Failed to load properties: {error.message}
-            <Button variant="link" size="sm" className="ml-2 h-auto p-0" onClick={() => refetch()}>
-              Retry
-            </Button>
+            <Button variant="link" size="sm" className="h-auto p-0" onClick={handleRefresh}>Retry</Button>
           </AlertDescription>
         </Alert>
       )}
@@ -231,20 +251,22 @@ export default function PropertiesPage() {
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-3 items-center">
+            {/* Search — debounced, no API call until user stops typing */}
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
               <Input
-                placeholder="Search by name, city, country, or ID..."
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+                placeholder="Search by name, city, country or ID…"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="pl-8 h-9"
               />
+              {isFetching && !isLoading && (
+                <RefreshCw className="absolute right-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground animate-spin" />
+              )}
             </div>
 
-            <Select value={statusFilter} onValueChange={(v) => { setStatusFilter(v); setPage(1) }}>
-              <SelectTrigger className="w-36 h-9">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
+            <Select value={statusFilter} onValueChange={handleStatusChange}>
+              <SelectTrigger className="w-36 h-9"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Statuses</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
@@ -254,22 +276,16 @@ export default function PropertiesPage() {
               </SelectContent>
             </Select>
 
-            <Select value={countryFilter} onValueChange={(v) => { setCountryFilter(v); setPage(1) }}>
-              <SelectTrigger className="w-36 h-9">
-                <SelectValue placeholder="Country" />
-              </SelectTrigger>
+            <Select value={countryFilter} onValueChange={handleCountryChange}>
+              <SelectTrigger className="w-36 h-9"><SelectValue placeholder="Country" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Countries</SelectItem>
-                {countries.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
+                {countries.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
 
-            <Select value={sortBy} onValueChange={(v) => { setSortBy(v); setPage(1) }}>
-              <SelectTrigger className="w-36 h-9">
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
+            <Select value={sortBy} onValueChange={handleSortChange}>
+              <SelectTrigger className="w-36 h-9"><SelectValue placeholder="Sort by" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="name">Sort: Name</SelectItem>
                 <SelectItem value="rating">Sort: Rating</SelectItem>
@@ -277,29 +293,20 @@ export default function PropertiesPage() {
               </SelectContent>
             </Select>
 
+            {/* View toggle */}
             <div className="flex border border-border rounded-md overflow-hidden">
-              <Button
-                variant={viewMode === 'grid' ? 'default' : 'ghost'}
-                size="icon"
-                className="rounded-none h-9 w-9"
-                onClick={() => setViewMode('grid')}
-                title="Grid view"
-              >
+              <Button variant={viewMode === 'grid' ? 'default' : 'ghost'} size="icon"
+                className="rounded-none h-9 w-9" onClick={() => setViewMode('grid')} title="Grid view">
                 <LayoutGrid className="h-3.5 w-3.5" />
               </Button>
-              <Button
-                variant={viewMode === 'table' ? 'default' : 'ghost'}
-                size="icon"
-                className="rounded-none h-9 w-9 border-l border-border"
-                onClick={() => setViewMode('table')}
-                title="Table view"
-              >
+              <Button variant={viewMode === 'table' ? 'default' : 'ghost'} size="icon"
+                className="rounded-none h-9 w-9 border-l border-border" onClick={() => setViewMode('table')} title="Table view">
                 <List className="h-3.5 w-3.5" />
               </Button>
             </div>
 
             <span className="text-xs text-muted-foreground ml-auto">
-              {isLoading ? 'Loading…' : `${filtered.length} properties`}
+              {isLoading ? 'Loading…' : `${total.toLocaleString()} properties`}
             </span>
           </div>
         </CardContent>
@@ -307,24 +314,19 @@ export default function PropertiesPage() {
 
       {/* Grid view */}
       {viewMode === 'grid' && (
-        <>
-          {isLoading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {Array.from({ length: 12 }).map((_, i) => <PropertyCardSkeleton key={i} />)}
-            </div>
-          ) : paged.length === 0 ? (
-            <EmptyState
-              icon={Building2}
-              title="No properties found"
-              description="Try adjusting your search or filter criteria."
-              action={{ label: 'Clear filters', onClick: () => { setSearch(''); setStatusFilter('all'); setCountryFilter('all'); setPage(1) } }}
-            />
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {paged.map((p) => <PropertyCard key={p.id} property={p} />)}
-            </div>
-          )}
-        </>
+        isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {Array.from({ length: 12 }).map((_, i) => <PropertyCardSkeleton key={i} />)}
+          </div>
+        ) : properties.length === 0 ? (
+          <EmptyState icon={Building2} title="No properties found"
+            description="Try adjusting your search or filter criteria."
+            action={{ label: 'Clear filters', onClick: clearFilters }} />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {properties.map((p) => <PropertyCard key={p.id} property={p} />)}
+          </div>
+        )
       )}
 
       {/* Table view */}
@@ -345,33 +347,24 @@ export default function PropertiesPage() {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <>
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <TableRow key={i}>
-                      {Array.from({ length: 8 }).map((_, j) => (
-                        <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </>
-              ) : paged.length === 0 ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 8 }).map((_, j) => (
+                      <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : properties.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-12">
-                    <EmptyState
-                      icon={Building2}
-                      title="No properties found"
+                    <EmptyState icon={Building2} title="No properties found"
                       description="Try adjusting your search or filter criteria."
-                      action={{ label: 'Clear filters', onClick: () => { setSearch(''); setStatusFilter('all'); setCountryFilter('all'); setPage(1) } }}
-                    />
+                      action={{ label: 'Clear filters', onClick: clearFilters }} />
                   </TableCell>
                 </TableRow>
               ) : (
-                paged.map((p) => (
-                  <TableRow
-                    key={p.id}
-                    className="cursor-pointer"
-                    onClick={() => router.push(`/properties/${p.id}`)}
-                  >
+                properties.map((p) => (
+                  <TableRow key={p.id} className="cursor-pointer" onClick={() => router.push(`/properties/${p.id}`)}>
                     <TableCell className="font-mono text-xs">{p.id}</TableCell>
                     <TableCell className="font-medium text-sm max-w-[200px] truncate">{p.name}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
@@ -397,31 +390,19 @@ export default function PropertiesPage() {
       )}
 
       {/* Pagination */}
-      {!isLoading && filtered.length > PAGE_SIZE && (
+      {!isLoading && total > PAGE_SIZE && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length}
+            Showing {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{Math.min(page * PAGE_SIZE, total).toLocaleString()} of {total.toLocaleString()}
           </p>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8"
-              disabled={page === 1}
-              onClick={() => setPage((p) => p - 1)}
-            >
+            <Button variant="outline" size="icon" className="h-8 w-8"
+              disabled={page === 1 || isFetching} onClick={() => setPage((p) => p - 1)}>
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
-            <span className="text-xs font-medium px-2">
-              Page {page} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-8 w-8"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
+            <span className="text-xs font-medium px-2">Page {page} of {totalPages}</span>
+            <Button variant="outline" size="icon" className="h-8 w-8"
+              disabled={page >= totalPages || isFetching} onClick={() => setPage((p) => p + 1)}>
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
