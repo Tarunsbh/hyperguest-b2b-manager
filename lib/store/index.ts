@@ -223,9 +223,9 @@ interface SettingsStore extends SettingsState {
 }
 
 const DEFAULT_SETTINGS: SettingsState = {
-  staticToken: process.env.NEXT_PUBLIC_HG_STATIC_TOKEN || '9d49c17f0b3a4c9d9693df041690eccc',
-  operationsToken: process.env.NEXT_PUBLIC_HG_OPERATIONS_TOKEN || 'fc35030b784648129cf3534a8d6fd0b8',
-  callbackToken: process.env.NEXT_PUBLIC_HG_CALLBACK_TOKEN || 'f99a7t2vlcr0swoNoC1qapac6ozoQ3tr',
+  staticToken: process.env.NEXT_PUBLIC_HG_STATIC_TOKEN || '',
+  operationsToken: process.env.NEXT_PUBLIC_HG_OPERATIONS_TOKEN || '',
+  callbackToken: process.env.NEXT_PUBLIC_HG_CALLBACK_TOKEN || '',
   userId: 'pradeep_s',
   email: 'it@eglobe-solutions.com',
   callbackUrl:

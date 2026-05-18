@@ -43,7 +43,7 @@ export async function unsubscribe(subscriptionId: string): Promise<unknown> {
 
 /**
  * GET https://pdm.hyperguest.io/api/pdm/subscriptions/{subscriptionId}/enableSubscription
- * Re-enable a disabled subscription. Uses STATIC_TOKEN (9d49c17f...)
+ * Re-enable a disabled subscription. Uses STATIC_TOKEN.
  */
 export async function enableSubscription(subscriptionId: string): Promise<unknown> {
   const { default: axios } = await import('axios');

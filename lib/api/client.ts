@@ -5,19 +5,16 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 
 // -------------------- TOKEN REGISTRY --------------------
-// HG_API_TOKEN is the single bearer token for all HyperGuest API calls.
-// Set NEXT_PUBLIC_HG_API_TOKEN in .env.local to override.
-// STATIC_TOKEN and OPERATIONS_TOKEN both fall back to the same value
-// so a single token configuration works for all endpoints.
+// Set all NEXT_PUBLIC_HG_* variables in .env.local — no defaults are provided here.
 const _apiToken =
   process.env.NEXT_PUBLIC_HG_API_TOKEN ||
   process.env.NEXT_PUBLIC_HG_STATIC_TOKEN ||
-  '9d49c17f0b3a4c9d9693df041690eccc';
+  '';
 
 export const API_TOKENS = {
   STATIC_TOKEN: _apiToken,
   OPERATIONS_TOKEN: process.env.NEXT_PUBLIC_HG_OPERATIONS_TOKEN || _apiToken,
-  CALLBACK_TOKEN: process.env.NEXT_PUBLIC_HG_CALLBACK_TOKEN || 'f99a7t2vlcr0swoNoC1qapac6ozoQ3tr',
+  CALLBACK_TOKEN: process.env.NEXT_PUBLIC_HG_CALLBACK_TOKEN || '',
 } as const;
 
 // -------------------- BASE URLS --------------------

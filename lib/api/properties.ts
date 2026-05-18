@@ -8,7 +8,7 @@ import type { PropertyDetail, PropertyListItem } from '../types';
 /**
  * GET https://hg-static.hyperguest.com/hotels.json
  * Returns the list of all available properties.
- * Uses STATIC_TOKEN (9d49c17f...)
+ * Uses STATIC_TOKEN.
  */
 export async function fetchPropertyList(): Promise<PropertyListItem[]> {
   const response = await withRetry(() => staticClient.get<PropertyListItem[]>('/hotels.json'));
