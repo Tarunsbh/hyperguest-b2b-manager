@@ -325,3 +325,4 @@ hyperguest-b2b-manager/
 ## License
 
 MIT License — Copyright (c) 2025 Eglobe Solutions
+# hyperguest-b2b-manager
