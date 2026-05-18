@@ -754,59 +754,46 @@ export default function SubscriptionsPage() {
   const enableSub = useEnableSubscription()
 
   // ── Property name cache (propertyId → hotel name) ──────────────────────────
+  // Names are fetched via a single batch DB call — zero per-property API hits
+  // after the first load. HyperGuest is only called for IDs not yet in the DB.
   const [propertyNames, setPropertyNames] = useState<Record<string, string>>({})
-  const fetchingIds = useRef<Set<string>>(new Set())
-  const abortRef = useRef<boolean>(false)
+  const knownIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    // Only fetch names for the currently visible filtered list
-    if (!filtered || filtered.length === 0) return
+    if (!subscriptions || subscriptions.length === 0) return
 
-    const newIds: string[] = []
-    filtered.forEach((sub) => {
+    // Collect every property ID from ALL subscriptions (not just filtered)
+    const newIds: number[] = []
+    subscriptions.forEach((sub) => {
       const ids = Array.isArray(sub.propertyIds) ? sub.propertyIds : [sub.propertyIds]
       ids.forEach((id) => {
         const key = String(id)
-        if (key && !propertyNames[key] && !fetchingIds.current.has(key)) {
-          newIds.push(key)
-          fetchingIds.current.add(key)
+        if (key && !knownIds.current.has(key)) {
+          knownIds.current.add(key)
+          const n = parseInt(key, 10)
+          if (!isNaN(n) && n > 0) newIds.push(n)
         }
       })
     })
 
     if (newIds.length === 0) return
 
-    abortRef.current = false
-
-    // Fetch one at a time with 300ms delay to respect rate limits
-    const fetchSequentially = async () => {
-      for (const id of newIds) {
-        if (abortRef.current) break
-        try {
-          const res = await fetch(`/api/properties/${id}`)
-          if (res.ok) {
-            const json = await res.json()
-            const prop = json?.data ?? json
-            const name: string = prop?.name ?? prop?.basicInfo?.name ?? ''
-            if (name) {
-              setPropertyNames((prev) => ({ ...prev, [id]: name }))
-            }
-          }
-        } catch {
-          // silently ignore — name just won't show
-        } finally {
-          fetchingIds.current.delete(id)
+    // Single batch request — DB returns all cached names instantly;
+    // only truly uncached IDs hit HyperGuest (throttled server-side)
+    fetch('/api/properties/names', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: newIds }),
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.data && typeof json.data === 'object') {
+          setPropertyNames((prev) => ({ ...prev, ...json.data }))
         }
-        // 300ms gap between requests to avoid 429
-        await new Promise((r) => setTimeout(r, 300))
-      }
-    }
-
-    fetchSequentially()
-
-    return () => { abortRef.current = true }
+      })
+      .catch(() => { /* silently ignore */ })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered])
+  }, [subscriptions])
 
   // Stats
   const stats = useMemo(() => {
