@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import {
@@ -549,10 +549,12 @@ function SubscriptionCard({
   sub,
   actions,
   index,
+  propertyNames,
 }: {
   sub: SubscriptionDetail & { createdAt?: string; email?: string; callbackUrl?: string }
   actions: SubscriptionCardAction
   index: number
+  propertyNames: Record<string, string>
 }) {
   const propertyIds = useMemo(() => {
     const raw = sub.propertyIds
@@ -653,17 +655,28 @@ function SubscriptionCard({
 
         <CardContent className="pt-0">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
-            {/* Property IDs */}
+            {/* Property IDs + Hotel Names */}
             <div className="col-span-2 sm:col-span-3 lg:col-span-4 space-y-1">
               <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
-                Property IDs
+                Properties
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {propertyIds.map((pid: string | number, i: number) => (
-                  <Badge key={i} variant="secondary" className="font-mono text-xs">
-                    {pid}
-                  </Badge>
-                ))}
+              <div className="flex flex-wrap gap-2">
+                {propertyIds.map((pid: string | number, i: number) => {
+                  const name = propertyNames[String(pid)]
+                  return (
+                    <div key={i} className="flex items-center gap-1.5 bg-muted/50 border border-border/60 rounded-md px-2 py-1">
+                      <span className="font-mono text-xs font-semibold text-foreground">{pid}</span>
+                      {name ? (
+                        <>
+                          <span className="text-muted-foreground text-xs">·</span>
+                          <span className="text-xs text-foreground/80 max-w-[160px] truncate" title={name}>{name}</span>
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground/50 italic">loading…</span>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
 
@@ -741,6 +754,62 @@ export default function SubscriptionsPage() {
   const { data: subscriptions, isLoading, error, refetch } = useSubscriptionList()
   const unsubscribe = useUnsubscribe()
   const enableSub = useEnableSubscription()
+
+  // ── Property name cache (propertyId → hotel name) ──────────────────────────
+  const [propertyNames, setPropertyNames] = useState<Record<string, string>>({})
+  const fetchingIds = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (!subscriptions) return
+    // Collect all unique property IDs across all subscriptions
+    const allIds = new Set<string>()
+    subscriptions.forEach((sub) => {
+      const ids = Array.isArray(sub.propertyIds) ? sub.propertyIds : [sub.propertyIds]
+      ids.forEach((id) => {
+        const key = String(id)
+        if (key && !propertyNames[key] && !fetchingIds.current.has(key)) {
+          allIds.add(key)
+        }
+      })
+    })
+    if (allIds.size === 0) return
+
+    // Mark as in-flight so we don't double-fetch
+    allIds.forEach((id) => fetchingIds.current.add(id))
+
+    // Fetch in parallel (batches of 10 to avoid hammering the API)
+    const ids = Array.from(allIds)
+    const BATCH = 10
+    const fetchBatch = async (batch: string[]) => {
+      await Promise.all(
+        batch.map(async (id) => {
+          try {
+            const res = await fetch(`/api/properties/${id}`)
+            if (!res.ok) return
+            const json = await res.json()
+            const prop = json?.data ?? json
+            const name: string = prop?.name ?? prop?.basicInfo?.name ?? ''
+            if (name) {
+              setPropertyNames((prev) => ({ ...prev, [id]: name }))
+            }
+          } catch {
+            // silently ignore — just won't show name
+          } finally {
+            fetchingIds.current.delete(id)
+          }
+        })
+      )
+    }
+
+    // Fire batches sequentially
+    const runBatches = async () => {
+      for (let i = 0; i < ids.length; i += BATCH) {
+        await fetchBatch(ids.slice(i, i + BATCH))
+      }
+    }
+    runBatches()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscriptions])
 
   // Stats
   const stats = useMemo(() => {
@@ -927,6 +996,7 @@ export default function SubscriptionsPage() {
                 key={sub.subscriptionId}
                 sub={sub}
                 index={i}
+                propertyNames={propertyNames}
                 actions={{
                   onView: () => setViewId(sub.subscriptionId),
                   onEnable: () =>
