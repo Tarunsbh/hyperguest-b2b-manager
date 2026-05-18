@@ -1,0 +1,86 @@
+version: "3.9"
+
+# =============================================================================
+# HyperGuest B2B Channel Manager — Docker Compose
+# =============================================================================
+# Services:
+#   app  — Next.js 14 application
+#   db   — MySQL 8.0
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # app: Next.js 14 channel manager
+  # ---------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NODE_ENV: production
+    container_name: hg_b2b_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - hg_network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # db: MySQL 8.0
+  # ---------------------------------------------------------------------------
+  db:
+    image: mysql:8.0
+    container_name: hg_b2b_db
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "HyperGuest2024!"
+      MYSQL_DATABASE: "hyperguest_b2b"
+      MYSQL_USER: "hg_user"
+      MYSQL_PASSWORD: "HyperGuest2024!"
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    networks:
+      - hg_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pHyperGuest2024!"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+# =============================================================================
+# Named volumes
+# =============================================================================
+volumes:
+  mysql_data:
+    driver: local
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  hg_network:
+    driver: bridge
