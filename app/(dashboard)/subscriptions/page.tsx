@@ -666,13 +666,11 @@ function SubscriptionCard({
                   return (
                     <div key={i} className="flex items-center gap-1.5 bg-muted/50 border border-border/60 rounded-md px-2 py-1">
                       <span className="font-mono text-xs font-semibold text-foreground">{pid}</span>
-                      {name ? (
+                      {name && (
                         <>
                           <span className="text-muted-foreground text-xs">·</span>
-                          <span className="text-xs text-foreground/80 max-w-[160px] truncate" title={name}>{name}</span>
+                          <span className="text-xs text-foreground/80 max-w-[180px] truncate" title={name}>{name}</span>
                         </>
-                      ) : (
-                        <span className="text-xs text-muted-foreground/50 italic">loading…</span>
                       )}
                     </div>
                   )
@@ -758,58 +756,57 @@ export default function SubscriptionsPage() {
   // ── Property name cache (propertyId → hotel name) ──────────────────────────
   const [propertyNames, setPropertyNames] = useState<Record<string, string>>({})
   const fetchingIds = useRef<Set<string>>(new Set())
+  const abortRef = useRef<boolean>(false)
 
   useEffect(() => {
-    if (!subscriptions) return
-    // Collect all unique property IDs across all subscriptions
-    const allIds = new Set<string>()
-    subscriptions.forEach((sub) => {
+    // Only fetch names for the currently visible filtered list
+    if (!filtered || filtered.length === 0) return
+
+    const newIds: string[] = []
+    filtered.forEach((sub) => {
       const ids = Array.isArray(sub.propertyIds) ? sub.propertyIds : [sub.propertyIds]
       ids.forEach((id) => {
         const key = String(id)
         if (key && !propertyNames[key] && !fetchingIds.current.has(key)) {
-          allIds.add(key)
+          newIds.push(key)
+          fetchingIds.current.add(key)
         }
       })
     })
-    if (allIds.size === 0) return
 
-    // Mark as in-flight so we don't double-fetch
-    allIds.forEach((id) => fetchingIds.current.add(id))
+    if (newIds.length === 0) return
 
-    // Fetch in parallel (batches of 10 to avoid hammering the API)
-    const ids = Array.from(allIds)
-    const BATCH = 10
-    const fetchBatch = async (batch: string[]) => {
-      await Promise.all(
-        batch.map(async (id) => {
-          try {
-            const res = await fetch(`/api/properties/${id}`)
-            if (!res.ok) return
+    abortRef.current = false
+
+    // Fetch one at a time with 300ms delay to respect rate limits
+    const fetchSequentially = async () => {
+      for (const id of newIds) {
+        if (abortRef.current) break
+        try {
+          const res = await fetch(`/api/properties/${id}`)
+          if (res.ok) {
             const json = await res.json()
             const prop = json?.data ?? json
             const name: string = prop?.name ?? prop?.basicInfo?.name ?? ''
             if (name) {
               setPropertyNames((prev) => ({ ...prev, [id]: name }))
             }
-          } catch {
-            // silently ignore — just won't show name
-          } finally {
-            fetchingIds.current.delete(id)
           }
-        })
-      )
-    }
-
-    // Fire batches sequentially
-    const runBatches = async () => {
-      for (let i = 0; i < ids.length; i += BATCH) {
-        await fetchBatch(ids.slice(i, i + BATCH))
+        } catch {
+          // silently ignore — name just won't show
+        } finally {
+          fetchingIds.current.delete(id)
+        }
+        // 300ms gap between requests to avoid 429
+        await new Promise((r) => setTimeout(r, 300))
       }
     }
-    runBatches()
+
+    fetchSequentially()
+
+    return () => { abortRef.current = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subscriptions])
+  }, [filtered])
 
   // Stats
   const stats = useMemo(() => {
