@@ -33,7 +33,7 @@ import {
 import {
   MapPin, Phone, Mail, Globe, Star, Bell, Send, AlertCircle,
   ExternalLink, ChevronLeft, Calendar, BarChart3, RefreshCw,
-  CheckCircle2, XCircle, ChevronDown, ChevronRight, Download,
+  CheckCircle2, XCircle, ChevronDown, ChevronRight, Download, Info,
 } from 'lucide-react'
 import Link from 'next/link'
 import axios from 'axios'
@@ -62,16 +62,33 @@ function buildDateRange(start: string, end: string) {
 }
 function dow(date: string) { return new Date(date).toLocaleDateString('en-US', { weekday: 'short' }) }
 
-function AriGridCell({ day, currency }: { day: CalendarDay | undefined; currency: string }) {
+function AriGridCell({
+  day, currency, onClick,
+}: {
+  day: CalendarDay | undefined
+  currency: string
+  onClick?: () => void
+}) {
   if (!day) return <td className="border border-border/30 px-1.5 py-1 text-center text-[10px] text-muted-foreground/30">—</td>
   const price = day.pricePerRoomAfterTax ?? day.baseAmounts?.[0]?.price ?? null
+  const hasOccupancies = (day.baseAmounts?.length ?? 0) > 1
+  const hasAdditional = day.additionalGuestsRate &&
+    (day.additionalGuestsRate.adults || day.additionalGuestsRate.children || day.additionalGuestsRate.infants)
   const bg = !day.isOpen
     ? 'bg-red-50 dark:bg-red-950/20'
     : day.numberOfAvailableRooms === 0
     ? 'bg-orange-50 dark:bg-orange-950/20'
     : 'bg-green-50 dark:bg-green-950/20'
   return (
-    <td className={cn('border border-border/30 px-1.5 py-1 text-center align-middle min-w-[80px]', bg)}>
+    <td
+      className={cn(
+        'border border-border/30 px-1.5 py-1 text-center align-middle min-w-[80px]',
+        bg,
+        onClick && 'cursor-pointer hover:ring-1 hover:ring-inset hover:ring-primary/40 hover:brightness-95 transition-all',
+      )}
+      onClick={onClick}
+      title={onClick ? 'Click to see all occupancy prices' : undefined}
+    >
       <div className="flex flex-col items-center gap-0.5">
         <div className="flex items-center gap-0.5">
           {day.isOpen
@@ -83,6 +100,9 @@ function AriGridCell({ day, currency }: { day: CalendarDay | undefined; currency
           <span className="text-[10px] font-semibold tabular-nums">{formatCurrency(price, currency)}</span>
         )}
         {day.minLOS > 1 && <span className="text-[9px] text-amber-600">min {day.minLOS}n</span>}
+        {(hasOccupancies || hasAdditional) && (
+          <Info className="h-2.5 w-2.5 text-primary/50 mt-0.5"/>
+        )}
       </div>
     </td>
   )
@@ -189,6 +209,11 @@ export default function PropertyDetailPage() {
   const [ariHasLoaded, setAriHasLoaded] = useState(false)
   const [ariCollapsed, setAriCollapsed] = useState<Record<string, boolean>>({})
 
+  // ARI cell detail dialog
+  const [cellDetail, setCellDetail] = useState<{
+    day: CalendarDay; roomCode: string; roomName: string; rpCode: string; date: string
+  } | null>(null)
+
   // Selected rate plans for the subscribe dialog — initialized once property loads
   const [selectedRatePlans, setSelectedRatePlans] = useState<string[]>([])
 
@@ -281,14 +306,29 @@ export default function PropertyDetailPage() {
     const rows: Record<string, unknown>[] = []
     for (const c of ariLoaded) {
       for (const d of c.days) {
-        rows.push({
+        const baseRow: Record<string, unknown> = {
           Room: c.roomCode, RoomName: c.roomName, RatePlan: c.rpCode,
           Date: d.date, Day: dow(d.date),
           Available: d.numberOfAvailableRooms,
           IsOpen: d.isOpen ? 'Yes' : 'No',
-          Price: d.pricePerRoomAfterTax ?? d.baseAmounts?.[0]?.price ?? '',
+          PricePerRoom: d.pricePerRoomAfterTax ?? '',
+          PricePerPerson: d.pricePerPersonAfterTax ?? '',
           MinLOS: d.minLOS, MaxLOS: d.maxLOS,
-        })
+        }
+        // Flatten all occupancy base amounts
+        if (d.baseAmounts?.length) {
+          d.baseAmounts.forEach((ba, i) => {
+            const label = `Occ${i + 1}_${ba.numberOfGuests.adults}A${ba.numberOfGuests.children ?? 0}C${ba.numberOfGuests.infants ?? 0}I`
+            baseRow[label] = ba.price
+          })
+        }
+        // Extra guest rates
+        if (d.additionalGuestsRate) {
+          baseRow['ExtraAdult'] = d.additionalGuestsRate.adults ?? ''
+          baseRow['ExtraChild'] = d.additionalGuestsRate.children ?? ''
+          baseRow['ExtraInfant'] = d.additionalGuestsRate.infants ?? ''
+        }
+        rows.push(baseRow)
       }
     }
     if (rows.length === 0) { toast.error('No data to export'); return }
@@ -682,7 +722,7 @@ export default function PropertyDetailPage() {
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-green-200 dark:bg-green-800/50"/>Open</div>
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-red-200 dark:bg-red-800/50"/>Closed</div>
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-orange-200 dark:bg-orange-800/50"/>0 rooms</div>
-                <span>· Each cell: <CheckCircle2 className="inline h-3 w-3 text-green-600"/> availability count · price</span>
+                <span>· Each cell: <CheckCircle2 className="inline h-3 w-3 text-green-600"/> availability · price (<Info className="inline h-3 w-3 text-primary/50"/> = more occupancies) · <strong>click for full price breakdown</strong></span>
               </div>
             )}
 
@@ -752,9 +792,23 @@ export default function PropertyDetailPage() {
                                           {c.rpCode}
                                         </span>
                                       </td>
-                                      {ariDates.map(d => (
-                                        <AriGridCell key={d} day={lookup.get(d)} currency={currency} />
-                                      ))}
+                                      {ariDates.map(d => {
+                                        const dayData = lookup.get(d)
+                                        return (
+                                          <AriGridCell
+                                            key={d}
+                                            day={dayData}
+                                            currency={currency}
+                                            onClick={dayData ? () => setCellDetail({
+                                              day: dayData,
+                                              roomCode: c.roomCode,
+                                              roomName: c.roomName,
+                                              rpCode: c.rpCode,
+                                              date: d,
+                                            }) : undefined}
+                                          />
+                                        )
+                                      })}
                                     </tr>
                                   )
                                 })}
@@ -1134,6 +1188,148 @@ export default function PropertyDetailPage() {
               {subscribeMutation.isPending ? 'Subscribing…' : 'Subscribe'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── ARI Cell Detail Dialog ───────────────────────────────────────────── */}
+      <Dialog open={!!cellDetail} onOpenChange={(open) => { if (!open) setCellDetail(null) }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          {cellDetail && (() => {
+            const { day, roomCode, roomName, rpCode, date } = cellDetail
+            const hasBase = (day.baseAmounts?.length ?? 0) > 0
+            const hasAdditional = day.additionalGuestsRate &&
+              (day.additionalGuestsRate.adults || day.additionalGuestsRate.children || day.additionalGuestsRate.infants)
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono bg-primary/10 text-primary px-2 py-0.5 rounded text-sm">{roomCode}</span>
+                    <span className="text-muted-foreground font-normal text-sm">{roomName}</span>
+                    <span className="text-muted-foreground font-normal text-sm">·</span>
+                    <span className="font-mono bg-secondary px-2 py-0.5 rounded text-sm">{rpCode}</span>
+                  </DialogTitle>
+                  <DialogDescription className="flex items-center gap-3 flex-wrap pt-1">
+                    <span className="font-medium text-foreground">{date}</span>
+                    <span className="text-muted-foreground">{dow(date)}</span>
+                    <span className="flex items-center gap-1">
+                      {day.isOpen
+                        ? <><CheckCircle2 className="h-3.5 w-3.5 text-green-600"/><span className="text-green-600 text-xs font-medium">Open</span></>
+                        : <><XCircle className="h-3.5 w-3.5 text-red-500"/><span className="text-red-500 text-xs font-medium">Closed</span></>}
+                    </span>
+                    <span className="text-xs">
+                      <span className="font-medium">{day.numberOfAvailableRooms ?? '—'}</span> rooms available
+                    </span>
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 pt-2">
+                  {/* Summary row */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { label: 'Price / Room (after tax)', value: day.pricePerRoomAfterTax != null ? formatCurrency(day.pricePerRoomAfterTax, currency) : '—' },
+                      { label: 'Price / Person (after tax)', value: day.pricePerPersonAfterTax != null ? formatCurrency(day.pricePerPersonAfterTax, currency) : '—' },
+                      { label: 'Min LOS', value: day.minLOS != null ? `${day.minLOS} night${day.minLOS !== 1 ? 's' : ''}` : '—' },
+                      { label: 'Max LOS', value: day.maxLOS != null ? `${day.maxLOS} nights` : '—' },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="rounded-md border bg-muted/30 px-3 py-2.5">
+                        <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide mb-0.5">{label}</div>
+                        <div className="text-sm font-semibold tabular-nums">{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Per-occupancy base prices */}
+                  {hasBase && (
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                        Occupancy Prices ({day.baseAmounts.length} combination{day.baseAmounts.length !== 1 ? 's' : ''})
+                      </h4>
+                      <div className="rounded-md border overflow-hidden">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-muted/40">
+                              <TableHead className="text-[10px] py-2 h-auto">Adults</TableHead>
+                              <TableHead className="text-[10px] py-2 h-auto">Children</TableHead>
+                              <TableHead className="text-[10px] py-2 h-auto">Infants</TableHead>
+                              <TableHead className="text-[10px] py-2 h-auto text-right">Price</TableHead>
+                              <TableHead className="text-[10px] py-2 h-auto text-center">Tax Incl.</TableHead>
+                              <TableHead className="text-[10px] py-2 h-auto text-center">Comm. Incl.</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {day.baseAmounts.map((ba, i) => (
+                              <TableRow key={i} className={i === 0 ? 'bg-primary/5' : ''}>
+                                <TableCell className="py-2 text-xs font-medium tabular-nums">
+                                  {ba.numberOfGuests?.adults ?? '—'}
+                                </TableCell>
+                                <TableCell className="py-2 text-xs tabular-nums text-muted-foreground">
+                                  {ba.numberOfGuests?.children ?? 0}
+                                </TableCell>
+                                <TableCell className="py-2 text-xs tabular-nums text-muted-foreground">
+                                  {ba.numberOfGuests?.infants ?? 0}
+                                </TableCell>
+                                <TableCell className="py-2 text-xs font-semibold tabular-nums text-right">
+                                  {formatCurrency(ba.price, currency)}
+                                </TableCell>
+                                <TableCell className="py-2 text-center">
+                                  {ba.taxesIncluded
+                                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mx-auto"/>
+                                    : <XCircle className="h-3.5 w-3.5 text-muted-foreground/40 mx-auto"/>}
+                                </TableCell>
+                                <TableCell className="py-2 text-center">
+                                  {ba.commissionIncluded
+                                    ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500 mx-auto"/>
+                                    : <XCircle className="h-3.5 w-3.5 text-muted-foreground/40 mx-auto"/>}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      {day.baseAmounts.length > 1 && (
+                        <p className="text-[10px] text-muted-foreground mt-1">First row shown in grid. Click a cell to see all.</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Additional guest rates */}
+                  {hasAdditional && (
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                        Additional Guest Rates (extra bed)
+                      </h4>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          { label: 'Extra Adult', value: day.additionalGuestsRate!.adults },
+                          { label: 'Extra Child', value: day.additionalGuestsRate!.children },
+                          { label: 'Extra Infant', value: day.additionalGuestsRate!.infants },
+                        ].map(({ label, value }) => (
+                          value != null && value > 0 ? (
+                            <div key={label} className="rounded-md border bg-amber-50 dark:bg-amber-950/20 border-amber-200/60 dark:border-amber-800/30 px-3 py-2.5">
+                              <div className="text-[10px] text-amber-700 dark:text-amber-400 font-medium mb-0.5">{label}</div>
+                              <div className="text-sm font-semibold tabular-nums text-amber-800 dark:text-amber-300">
+                                {formatCurrency(value, currency)}
+                              </div>
+                            </div>
+                          ) : null
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!hasBase && !hasAdditional && (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No detailed occupancy pricing available for this day.
+                    </p>
+                  )}
+                </div>
+
+                <DialogFooter className="mt-2">
+                  <Button variant="outline" size="sm" onClick={() => setCellDetail(null)}>Close</Button>
+                </DialogFooter>
+              </>
+            )
+          })()}
         </DialogContent>
       </Dialog>
 
