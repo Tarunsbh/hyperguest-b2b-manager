@@ -62,6 +62,14 @@ function buildDateRange(start: string, end: string) {
 }
 function dow(date: string) { return new Date(date).toLocaleDateString('en-US', { weekday: 'short' }) }
 
+function guestLabel(guests: { adults?: number; children?: number; infants?: number }) {
+  const parts: string[] = []
+  if (guests.adults) parts.push(`${guests.adults}A`)
+  if (guests.children) parts.push(`${guests.children}C`)
+  if (guests.infants) parts.push(`${guests.infants}I`)
+  return parts.join('+') || '—'
+}
+
 function AriGridCell({
   day, currency, onClick,
 }: {
@@ -70,40 +78,64 @@ function AriGridCell({
   onClick?: () => void
 }) {
   if (!day) return <td className="border border-border/30 px-1.5 py-1 text-center text-[10px] text-muted-foreground/30">—</td>
-  const price = day.pricePerRoomAfterTax ?? day.baseAmounts?.[0]?.price ?? null
-  const hasOccupancies = (day.baseAmounts?.length ?? 0) > 1
-  const hasAdditional = day.additionalGuestsRate &&
-    (day.additionalGuestsRate.adults || day.additionalGuestsRate.children || day.additionalGuestsRate.infants)
+
+  const baseAmounts = day.baseAmounts ?? []
+  const agr = day.additionalGuestsRate
+  const hasAGR = agr && (agr.adults || agr.children || agr.infants)
+
   const bg = !day.isOpen
     ? 'bg-red-50 dark:bg-red-950/20'
     : day.numberOfAvailableRooms === 0
     ? 'bg-orange-50 dark:bg-orange-950/20'
     : 'bg-green-50 dark:bg-green-950/20'
+
   return (
     <td
       className={cn(
-        'border border-border/30 px-1.5 py-1 text-center align-middle min-w-[80px]',
+        'border border-border/30 px-1.5 py-1.5 text-center align-top min-w-[100px]',
         bg,
-        onClick && 'cursor-pointer hover:ring-1 hover:ring-inset hover:ring-primary/40 hover:brightness-95 transition-all',
+        onClick && 'cursor-pointer hover:brightness-95 transition-all',
       )}
       onClick={onClick}
-      title={onClick ? 'Click to see all occupancy prices' : undefined}
+      title={onClick ? 'Click for full pricing detail' : undefined}
     >
-      <div className="flex flex-col items-center gap-0.5">
-        <div className="flex items-center gap-0.5">
-          {day.isOpen
-            ? <CheckCircle2 className="h-2.5 w-2.5 text-green-600 shrink-0"/>
-            : <XCircle className="h-2.5 w-2.5 text-red-500 shrink-0"/>}
-          <span className="text-[10px] font-medium tabular-nums">{day.numberOfAvailableRooms ?? '—'}</span>
-        </div>
-        {price != null && (
-          <span className="text-[10px] font-semibold tabular-nums">{formatCurrency(price, currency)}</span>
-        )}
-        {day.minLOS > 1 && <span className="text-[9px] text-amber-600">min {day.minLOS}n</span>}
-        {(hasOccupancies || hasAdditional) && (
-          <Info className="h-2.5 w-2.5 text-primary/50 mt-0.5"/>
-        )}
+      {/* Availability row */}
+      <div className="flex items-center justify-center gap-0.5 mb-1">
+        {day.isOpen
+          ? <CheckCircle2 className="h-2.5 w-2.5 text-green-600 shrink-0"/>
+          : <XCircle className="h-2.5 w-2.5 text-red-500 shrink-0"/>}
+        <span className="text-[10px] font-medium tabular-nums">{day.numberOfAvailableRooms ?? '—'}</span>
+        {day.minLOS > 1 && <span className="text-[9px] text-amber-600 ml-0.5">·min{day.minLOS}</span>}
       </div>
+
+      {/* Per-occupancy prices */}
+      {baseAmounts.length > 0 ? (
+        <div className="space-y-0.5">
+          {baseAmounts.map((ba, i) => (
+            <div key={i} className="flex items-center justify-between gap-1 text-[9px] leading-tight">
+              <span className="text-muted-foreground font-medium shrink-0 bg-background/60 px-0.5 rounded">
+                {guestLabel(ba.numberOfGuests)}
+              </span>
+              <span className="font-semibold tabular-nums text-right">{formatCurrency(ba.price, currency)}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        day.pricePerRoomAfterTax != null && (
+          <div className="text-[10px] font-semibold tabular-nums text-center">
+            {formatCurrency(day.pricePerRoomAfterTax, currency)}
+          </div>
+        )
+      )}
+
+      {/* Additional guest rates */}
+      {hasAGR && (
+        <div className="mt-1 pt-1 border-t border-border/30 space-y-0.5">
+          {agr!.adults  ? <div className="flex items-center justify-between gap-1 text-[9px]"><span className="text-amber-600">+A</span><span className="tabular-nums font-medium">{formatCurrency(agr!.adults,  currency)}</span></div> : null}
+          {agr!.children? <div className="flex items-center justify-between gap-1 text-[9px]"><span className="text-amber-600">+C</span><span className="tabular-nums font-medium">{formatCurrency(agr!.children,currency)}</span></div> : null}
+          {agr!.infants ? <div className="flex items-center justify-between gap-1 text-[9px]"><span className="text-amber-600">+I</span><span className="tabular-nums font-medium">{formatCurrency(agr!.infants, currency)}</span></div> : null}
+        </div>
+      )}
     </td>
   )
 }
@@ -722,7 +754,7 @@ export default function PropertyDetailPage() {
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-green-200 dark:bg-green-800/50"/>Open</div>
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-red-200 dark:bg-red-800/50"/>Closed</div>
                 <div className="flex items-center gap-1.5"><div className="h-3 w-5 rounded bg-orange-200 dark:bg-orange-800/50"/>0 rooms</div>
-                <span>· Each cell: <CheckCircle2 className="inline h-3 w-3 text-green-600"/> availability · price (<Info className="inline h-3 w-3 text-primary/50"/> = more occupancies) · <strong>click for full price breakdown</strong></span>
+                <span>· Each cell: <CheckCircle2 className="inline h-3 w-3 text-green-600"/> avail · occupancy prices (2A, 2A+1C…) · <span className="text-amber-600 font-medium">+A/C/I</span> extra guest rates · click for detail</span>
               </div>
             )}
 
