@@ -16,6 +16,12 @@ import {
   RefreshCw,
   Search,
   Filter,
+  Link2,
+  KeyRound,
+  Building2,
+  ListTree,
+  Settings2,
+  Clock,
 } from 'lucide-react'
 
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -48,7 +54,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
-import { cn, formatDate, getStatusBadgeVariant } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, getStatusBadgeVariant } from '@/lib/utils'
 import {
   useSubscriptionList,
   useSubscriptionDetail,
@@ -57,7 +63,7 @@ import {
   useEnableSubscription,
   useDeleteSubscription,
 } from '@/lib/hooks/useSubscriptions'
-import type { SubscriptionDetail, PropertyDetail } from '@/lib/types'
+import type { SubscriptionDetail, SubscriptionRatePlan, PropertyDetail } from '@/lib/types'
 
 // ─────────────────────────────── HELPERS ────────────────────────────────────
 
@@ -395,32 +401,56 @@ interface ViewSubscriptionDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
+function SectionHeading({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{label}</p>
+    </div>
+  )
+}
+
 function ViewSubscriptionDialog({ subscriptionId, onOpenChange }: ViewSubscriptionDialogProps) {
   const [copied, setCopied] = useState(false)
+  const [copiedUrl, setCopiedUrl] = useState(false)
   const open = !!subscriptionId
 
   const { data, isLoading, error } = useSubscriptionDetail(subscriptionId ?? '')
 
-  const handleCopy = async () => {
-    if (!subscriptionId) return
-    await navigator.clipboard.writeText(subscriptionId)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+  const handleCopy = async (text: string, setter: (v: boolean) => void) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setter(true)
+      setTimeout(() => setter(false), 2000)
+    } catch { /* ignore */ }
   }
+
+  const ratePlans: SubscriptionRatePlan[] = data?.ratePlans ?? []
+  const callbackUrl = data?.envelopeSubUrls?.Callback ?? ''
+
+  // Collect any extra unknown fields to display at the bottom
+  const knownKeys = new Set([
+    'subscriptionId', 'userId', 'email', 'propertyIds', 'method', 'version',
+    'envelope', 'status', 'ratePlans', 'envelopeSubUrls', 'authentication',
+    'parameters', 'createdAt', 'updatedAt',
+  ])
+  const extraEntries = data
+    ? Object.entries(data).filter(([k, v]) => !knownKeys.has(k) && v !== undefined && v !== null)
+    : []
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Subscription Details</DialogTitle>
           <DialogDescription>
-            Full details from HyperGuest for this subscription.
+            Live data from HyperGuest PDM for this subscription.
           </DialogDescription>
         </DialogHeader>
 
         {isLoading && (
           <div className="space-y-3 py-2">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {Array.from({ length: 8 }).map((_, i) => (
               <Skeleton key={i} className="h-5 w-full" />
             ))}
           </div>
@@ -429,54 +459,211 @@ function ViewSubscriptionDialog({ subscriptionId, onOpenChange }: ViewSubscripti
         {error && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
+            <AlertTitle>Error loading details</AlertTitle>
             <AlertDescription>{error.message}</AlertDescription>
           </Alert>
         )}
 
         {data && (
-          <div className="space-y-4 text-sm">
-            {/* ID with copy */}
+          <div className="space-y-5 text-sm">
+
+            {/* ── Subscription ID ── */}
             <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
-              <span className="font-mono text-xs break-all">{data.subscriptionId}</span>
-              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0 ml-2" onClick={handleCopy}>
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-0.5">Subscription ID</p>
+                <span className="font-mono text-xs break-all font-semibold">{data.subscriptionId}</span>
+              </div>
+              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0 ml-2"
+                onClick={() => handleCopy(data.subscriptionId, setCopied)}>
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
               </Button>
             </div>
 
-            {/* Detail grid */}
-            <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-              {[
-                ['Status', <Badge key="s" className={cn('text-xs border', statusBadgeClass(data.status))}>{data.status}</Badge>],
-                ['Method', <Badge key="m" variant="outline" className="text-xs">{data.method}</Badge>],
-                ['User ID', data.userId],
-                ['Envelope', data.envelope],
-                ['Version', data.version],
-              ].map(([label, value], i) => (
-                <div key={i} className="space-y-0.5">
-                  <p className="text-xs text-muted-foreground">{label as string}</p>
-                  <div className="font-medium">
-                    {typeof value === 'string' || typeof value === 'number' ? String(value) : value}
-                  </div>
+            {/* ── Basic Info ── */}
+            <div>
+              <SectionHeading icon={Info} label="Basic Info" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3">
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <Badge className={cn('text-xs border', statusBadgeClass(data.status))}>
+                    {data.status}
+                  </Badge>
                 </div>
-              ))}
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">Method</p>
+                  <Badge variant="outline" className="text-xs font-mono">{data.method}</Badge>
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">Envelope</p>
+                  <p className="font-medium">{data.envelope}</p>
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">Version</p>
+                  <p className="font-medium">{data.version}</p>
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-xs text-muted-foreground">User ID</p>
+                  <p className="font-medium font-mono text-xs">{data.userId}</p>
+                </div>
+                {data.email && (
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Email</p>
+                    <p className="font-medium text-xs break-all">{data.email}</p>
+                  </div>
+                )}
+              </div>
             </div>
 
             <Separator />
 
-            {/* Property IDs */}
-            <div className="space-y-1.5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Property IDs
-              </p>
+            {/* ── Properties ── */}
+            <div>
+              <SectionHeading icon={Building2} label={`Properties (${(data.propertyIds ?? []).length})`} />
               <div className="flex flex-wrap gap-1.5">
                 {(data.propertyIds ?? []).map((pid) => (
-                  <Badge key={pid} variant="secondary" className="font-mono">
+                  <Badge key={pid} variant="secondary" className="font-mono text-xs">
                     {pid}
                   </Badge>
                 ))}
+                {(data.propertyIds ?? []).length === 0 && (
+                  <span className="text-xs text-muted-foreground">No properties</span>
+                )}
               </div>
             </div>
+
+            <Separator />
+
+            {/* ── Rate Plans ── */}
+            {ratePlans.length > 0 && (
+              <>
+                <div>
+                  <SectionHeading icon={ListTree} label="Rate Plans" />
+                  <div className="space-y-2">
+                    {ratePlans.map((rp) => (
+                      <div key={rp.propertyId}
+                        className="rounded-md border bg-muted/30 px-3 py-2">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Building2 className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-xs font-semibold">Property {rp.propertyId}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {(rp.ratePlanCodes ?? []).map((code) => (
+                            <Badge key={code} variant="outline"
+                              className="font-mono text-[11px] px-1.5 py-0">
+                              {code}
+                            </Badge>
+                          ))}
+                          {(rp.ratePlanCodes ?? []).length === 0 && (
+                            <span className="text-xs text-muted-foreground">No rate plan codes</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {/* ── Callback URL ── */}
+            {callbackUrl && (
+              <>
+                <div>
+                  <SectionHeading icon={Link2} label="Callback URL" />
+                  <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                    <span className="font-mono text-xs break-all flex-1 text-foreground">
+                      {callbackUrl}
+                    </span>
+                    <Button size="sm" variant="ghost" className="h-6 w-6 p-0 shrink-0"
+                      onClick={() => handleCopy(callbackUrl, setCopiedUrl)}>
+                      {copiedUrl
+                        ? <Check className="h-3 w-3 text-emerald-500" />
+                        : <Copy className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {/* ── Authentication ── */}
+            {data.authentication && Object.keys(data.authentication).length > 0 && (
+              <>
+                <div>
+                  <SectionHeading icon={KeyRound} label="Authentication" />
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+                    {Object.entries(data.authentication).map(([k, v]) => (
+                      <div key={k} className="flex items-center gap-2 text-xs">
+                        <span className="text-muted-foreground capitalize w-16 shrink-0">{k}</span>
+                        <span className="font-mono break-all">
+                          {v ? String(v) : <span className="text-muted-foreground italic">empty</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {/* ── Parameters ── */}
+            {data.parameters && Object.keys(data.parameters).length > 0 && (
+              <>
+                <div>
+                  <SectionHeading icon={Settings2} label="Parameters" />
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1">
+                    {Object.entries(data.parameters).map(([k, v]) => (
+                      <div key={k} className="flex items-center gap-2 text-xs">
+                        <span className="text-muted-foreground w-32 shrink-0">{k}</span>
+                        <span className="font-mono">{JSON.stringify(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {/* ── Timestamps ── */}
+            {(data.createdAt || data.updatedAt) && (
+              <>
+                <div>
+                  <SectionHeading icon={Clock} label="Timestamps" />
+                  <div className="grid grid-cols-2 gap-4">
+                    {data.createdAt && (
+                      <div className="space-y-0.5">
+                        <p className="text-xs text-muted-foreground">Created</p>
+                        <p className="font-medium text-xs">{formatDateTime(data.createdAt)}</p>
+                      </div>
+                    )}
+                    {data.updatedAt && (
+                      <div className="space-y-0.5">
+                        <p className="text-xs text-muted-foreground">Last Updated</p>
+                        <p className="font-medium text-xs">{formatDateTime(data.updatedAt)}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <Separator />
+              </>
+            )}
+
+            {/* ── Extra / Unknown fields ── */}
+            {extraEntries.length > 0 && (
+              <div>
+                <SectionHeading icon={Info} label="Additional Fields" />
+                <div className="rounded-md border bg-muted/30 px-3 py-2 space-y-1.5">
+                  {extraEntries.map(([k, v]) => (
+                    <div key={k} className="flex items-start gap-2 text-xs">
+                      <span className="text-muted-foreground w-36 shrink-0 capitalize">{k}</span>
+                      <span className="font-mono break-all">
+                        {typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

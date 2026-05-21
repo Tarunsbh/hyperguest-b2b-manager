@@ -245,14 +245,33 @@ export interface SubscribeResponse {
   status: string;
 }
 
+export interface SubscriptionRatePlan {
+  propertyId: number;
+  ratePlanCodes: string[];
+}
+
 export interface SubscriptionDetail {
   subscriptionId: string;
   userId: string;
+  email?: string;
   propertyIds: number[];
   method: string;
   version: number;
   envelope: string;
   status: string;
+  // Rate plans per property
+  ratePlans?: SubscriptionRatePlan[];
+  // Callback / webhook URL
+  envelopeSubUrls?: { Callback?: string; [key: string]: string | undefined };
+  // Auth (usually empty bearer)
+  authentication?: { bearer?: string; [key: string]: unknown };
+  // Extra config params
+  parameters?: Record<string, unknown>;
+  // Timestamps
+  createdAt?: string;
+  updatedAt?: string;
+  // Catch-all for any extra fields the API sends
+  [key: string]: unknown;
 }
 
 // -------------------- BOOKINGS --------------------
