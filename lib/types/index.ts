@@ -387,7 +387,8 @@ export interface PaginationState {
 
 export interface FilterState {
   search?: string;
-  status?: string;
+  status?: string;       // push outcome: 'success' | 'failed'
+  resStatus?: string;    // reservation type: 'Commit' | 'Cancel' | 'Modify'
   countryCode?: string;
   dateFrom?: string;
   dateTo?: string;

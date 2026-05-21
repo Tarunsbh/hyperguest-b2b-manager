@@ -8,8 +8,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'sonner'
 import {
   Plus, Send, Eye, Copy, Download, Search, ChevronLeft, ChevronRight,
-  X, RefreshCw, Trash2, CheckCircle2, XCircle, Loader2, FileText,
-  CalendarDays, Hotel, User, DollarSign, Hash
+  X, RefreshCw, CheckCircle2, XCircle, Loader2, FileText,
+  CalendarDays, Hotel, User, DollarSign, Hash, TrendingUp
 } from 'lucide-react'
 
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -584,7 +584,7 @@ function ViewBookingDialog({ booking, open, onOpenChange }: ViewBookingDialogPro
 function SkeletonRow() {
   return (
     <TableRow>
-      {Array.from({ length: 9 }).map((_, i) => (
+      {Array.from({ length: 11 }).map((_, i) => (
         <TableCell key={i}><Skeleton className="h-4 w-full" /></TableCell>
       ))}
     </TableRow>
@@ -597,6 +597,7 @@ export default function BookingsPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [resStatusFilter, setResStatusFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [formOpen, setFormOpen] = useState(false)
@@ -607,6 +608,7 @@ export default function BookingsPage() {
   const filters = {
     search: search || undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
+    resStatus: resStatusFilter !== 'all' ? resStatusFilter : undefined,
     dateFrom: dateFrom || undefined,
     dateTo: dateTo || undefined,
   }
@@ -661,7 +663,7 @@ export default function BookingsPage() {
   }
 
   // Reset page on filter change
-  useEffect(() => { setPage(1) }, [search, statusFilter, dateFrom, dateTo])
+  useEffect(() => { setPage(1) }, [search, statusFilter, resStatusFilter, dateFrom, dateTo])
 
   const stats = statsData
 
@@ -682,7 +684,7 @@ export default function BookingsPage() {
         </PageHeader>
 
         {/* Stats row */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <StatsCard
             icon={Send}
             label="Total Pushed"
@@ -708,13 +710,21 @@ export default function BookingsPage() {
             index={2}
           />
           <StatsCard
-            icon={Hash}
+            icon={CalendarDays}
+            label="Today"
+            value={statsLoading ? 0 : (stats?.today ?? 0)}
+            variant="amber"
+            loading={statsLoading}
+            index={3}
+          />
+          <StatsCard
+            icon={TrendingUp}
             label="Success Rate"
             value={statsLoading ? 0 : Math.round(stats?.successRate ?? 0)}
             suffix="%"
             variant="purple"
             loading={statsLoading}
-            index={3}
+            index={4}
           />
         </div>
 
@@ -733,12 +743,23 @@ export default function BookingsPage() {
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Status" />
+                  <SelectValue placeholder="Push Status" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
                   <SelectItem value="success">Success</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={resStatusFilter} onValueChange={setResStatusFilter}>
+                <SelectTrigger className="w-36">
+                  <SelectValue placeholder="Res Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value="Commit">Commit</SelectItem>
+                  <SelectItem value="Cancel">Cancel</SelectItem>
+                  <SelectItem value="Modify">Modify</SelectItem>
                 </SelectContent>
               </Select>
               <div className="flex items-center gap-2">
@@ -777,7 +798,8 @@ export default function BookingsPage() {
                 <TableHead>Check-Out</TableHead>
                 <TableHead className="text-center">Rooms</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>Push Status</TableHead>
+                <TableHead>Type</TableHead>
                 <TableHead>Created At</TableHead>
                 <TableHead className="w-16 text-center">Actions</TableHead>
               </TableRow>
@@ -787,7 +809,7 @@ export default function BookingsPage() {
                 Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
               ) : pagedBookings.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="p-0">
+                  <TableCell colSpan={11} className="p-0">
                     <EmptyState
                       icon={Send}
                       title="No bookings found"
@@ -871,6 +893,21 @@ export default function BookingsPage() {
                         )}
                       >
                         {booking.success ? 'Success' : 'Failed'}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-xs font-medium',
+                          booking.resStatus === 'Cancel'
+                            ? 'border-red-300 text-red-600 dark:border-red-700 dark:text-red-400'
+                            : booking.resStatus === 'Modify'
+                            ? 'border-amber-300 text-amber-600 dark:border-amber-700 dark:text-amber-400'
+                            : 'border-blue-300 text-blue-600 dark:border-blue-700 dark:text-blue-400'
+                        )}
+                      >
+                        {booking.resStatus || 'Commit'}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">

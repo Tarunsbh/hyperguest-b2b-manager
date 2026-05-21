@@ -28,10 +28,20 @@ export async function GET(request: NextRequest) {
   const conditions: string[] = [];
   const filterParams: Record<string, unknown> = {};
 
-  if (status) {
-    conditions.push('resStatus = :status');
-    filterParams.status = status;
+  // "status" param encodes the push success/fail dimension
+  if (status === 'success') {
+    conditions.push('success = 1');
+  } else if (status === 'failed') {
+    conditions.push('success = 0');
   }
+
+  // "resStatus" param filters by reservation type (Commit / Cancel / Modify)
+  const resStatusParam = searchParams.get('resStatus');
+  if (resStatusParam) {
+    conditions.push('resStatus = :resStatus');
+    filterParams.resStatus = resStatusParam;
+  }
+
   if (dateFrom) {
     conditions.push('checkIn >= :dateFrom');
     filterParams.dateFrom = dateFrom;

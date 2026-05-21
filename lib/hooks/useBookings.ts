@@ -42,11 +42,12 @@ function buildFilterQueryString(filters?: FilterState, page = 1, pageSize = 25):
     page: String(page),
     pageSize: String(pageSize),
   };
-  if (filters?.search) params.search = filters.search;
-  if (filters?.status) params.status = filters.status;
+  if (filters?.search)     params.search    = filters.search;
+  if (filters?.status)     params.status    = filters.status;
+  if (filters?.resStatus)  params.resStatus = filters.resStatus;
   if (filters?.countryCode) params.countryCode = filters.countryCode;
-  if (filters?.dateFrom) params.dateFrom = filters.dateFrom;
-  if (filters?.dateTo) params.dateTo = filters.dateTo;
+  if (filters?.dateFrom)   params.dateFrom  = filters.dateFrom;
+  if (filters?.dateTo)     params.dateTo    = filters.dateTo;
   return `?${new URLSearchParams(params).toString()}`;
 }
 
