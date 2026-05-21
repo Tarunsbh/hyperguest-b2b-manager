@@ -109,7 +109,7 @@ export function useSubscribe() {
 }
 
 /**
- * Unsubscribe from ARI updates for a subscription by ID.
+ * Disable (unsubscribe) a subscription — keeps local DB record with status=disabled.
  */
 export function useUnsubscribe() {
   const queryClient = useQueryClient();
@@ -122,6 +122,23 @@ export function useUnsubscribe() {
     onSuccess: (_data, subscriptionId) => {
       queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
       queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.detail(subscriptionId) });
+    },
+  });
+}
+
+/**
+ * Hard delete: unsubscribes from HyperGuest (best-effort) and removes from local DB.
+ */
+export function useDeleteSubscription() {
+  const queryClient = useQueryClient();
+
+  return useMutation<unknown, Error, string>({
+    mutationFn: (subscriptionId) =>
+      fetchJson<unknown>(`/api/subscriptions/${subscriptionId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
     },
   });
 }

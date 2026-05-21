@@ -25,7 +25,7 @@ export async function POST(
   }
 
   try {
-    // ---- Call PDM enableSubscription (GET per API spec) ----
+    // ---- Call PDM enableSubscription ----
     const response = await axios.get(
       `${BASE_URLS.PDM}/api/pdm/subscriptions/${id}/enableSubscription`,
       {
@@ -37,19 +37,15 @@ export async function POST(
       }
     );
 
-    // ---- Update DB status to 'enabled' (best-effort) ----
+    // ---- Update DB status to 'enabled' ----
     try {
       await execute(
-        `
-        UPDATE hg_subscriptions
-        SET status = 'enabled', updatedAt = UTC_TIMESTAMP()
-        WHERE subscriptionId = :subscriptionId
-        `,
+        `UPDATE hg_subscriptions
+            SET status = 'enabled', updatedAt = UTC_TIMESTAMP()
+          WHERE subscriptionId = :subscriptionId`,
         { subscriptionId: id }
       );
-    } catch {
-      // DB write failure is non-fatal
-    }
+    } catch { /* non-fatal */ }
 
     return NextResponse.json({
       success: true,
@@ -57,20 +53,33 @@ export async function POST(
       message: `Subscription ${id} enabled`,
     });
   } catch (err: unknown) {
-    let message: string;
     if (axios.isAxiosError(err)) {
       const body = err.response?.data;
       const bodyStr = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : err.message;
-      message = `PDM API error ${err.response?.status ?? ''}: ${bodyStr}`.trim();
-    } else {
-      message = err instanceof Error ? err.message : 'Unknown error';
+
+      // If HyperGuest says "not found", the subscription no longer exists on their side.
+      // It cannot be re-enabled — surface a clear, actionable message.
+      const isNotFound =
+        err.response?.status === 404 ||
+        bodyStr.toLowerCase().includes('not found') ||
+        bodyStr.includes('PDM.404') ||
+        bodyStr.includes('PDM.500');
+
+      if (isNotFound) {
+        const friendlyMsg =
+          `Subscription not found in HyperGuest — it may have been deleted on their side. ` +
+          `Please delete this subscription locally and create a new one.`;
+        console.warn(`[POST /api/subscriptions/${id}/enable] HG not found`);
+        return NextResponse.json({ success: false, data: null, error: friendlyMsg }, { status: 404 });
+      }
+
+      const message = `PDM API error ${err.response?.status ?? ''}: ${bodyStr}`.trim();
+      console.error(`[POST /api/subscriptions/${id}/enable]`, message);
+      return NextResponse.json({ success: false, data: null, error: message }, { status: 502 });
     }
 
+    const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[POST /api/subscriptions/${id}/enable]`, message);
-
-    return NextResponse.json(
-      { success: false, data: null, error: message },
-      { status: 502 }
-    );
+    return NextResponse.json({ success: false, data: null, error: message }, { status: 502 });
   }
 }

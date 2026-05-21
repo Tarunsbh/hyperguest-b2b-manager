@@ -55,6 +55,7 @@ import {
   useSubscribe,
   useUnsubscribe,
   useEnableSubscription,
+  useDeleteSubscription,
 } from '@/lib/hooks/useSubscriptions'
 import type { SubscriptionDetail, PropertyDetail } from '@/lib/types'
 
@@ -751,6 +752,7 @@ export default function SubscriptionsPage() {
 
   const { data: subscriptions, isLoading, error, refetch } = useSubscriptionList()
   const unsubscribe = useUnsubscribe()
+  const deleteSub = useDeleteSubscription()
   const enableSub = useEnableSubscription()
 
   // ── Property name cache (propertyId → hotel name) ──────────────────────────
@@ -827,11 +829,14 @@ export default function SubscriptionsPage() {
     setActionLoading((prev) => ({ ...prev, [`${type}-${subscriptionId}`]: true }))
 
     try {
-      if (type === 'delete' || type === 'disable') {
+      if (type === 'delete') {
+        // Hard delete: unsubscribes from HG (best-effort) + removes from local DB
+        await deleteSub.mutateAsync(subscriptionId)
+        toast.success('Subscription deleted', { description: `ID: ${subscriptionId}` })
+      } else if (type === 'disable') {
+        // Soft disable: marks as disabled in HG + local DB (HG "not found" = already disabled)
         await unsubscribe.mutateAsync(subscriptionId)
-        toast.success(type === 'delete' ? 'Subscription deleted' : 'Subscription disabled', {
-          description: `ID: ${subscriptionId}`,
-        })
+        toast.success('Subscription disabled', { description: `ID: ${subscriptionId}` })
       } else if (type === 'enable') {
         await enableSub.mutateAsync(subscriptionId)
         toast.success('Subscription enabled', { description: `ID: ${subscriptionId}` })

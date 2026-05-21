@@ -23,8 +23,20 @@ export async function POST(
     );
   }
 
+  // Helper: update DB status regardless of HyperGuest outcome
+  const updateDbStatus = async (status: 'disabled') => {
+    try {
+      await execute(
+        `UPDATE hg_subscriptions
+            SET status = :status, updatedAt = UTC_TIMESTAMP()
+          WHERE subscriptionId = :subscriptionId`,
+        { status, subscriptionId: id }
+      );
+    } catch { /* non-fatal */ }
+  };
+
   try {
-    // ---- Call PDM unsubscribe (GET per API spec) ----
+    // ---- Call PDM unsubscribe ----
     const response = await axios.get(
       `${BASE_URLS.PDM}/api/pdm/subscriptions/${id}/unsubscribe`,
       {
@@ -36,19 +48,7 @@ export async function POST(
       }
     );
 
-    // ---- Update DB status to 'disabled' (best-effort) ----
-    try {
-      await execute(
-        `
-        UPDATE hg_subscriptions
-        SET status = 'disabled', updatedAt = UTC_TIMESTAMP()
-        WHERE subscriptionId = :subscriptionId
-        `,
-        { subscriptionId: id }
-      );
-    } catch {
-      // DB write failure is non-fatal
-    }
+    await updateDbStatus('disabled');
 
     return NextResponse.json({
       success: true,
@@ -56,20 +56,35 @@ export async function POST(
       message: `Subscription ${id} unsubscribed`,
     });
   } catch (err: unknown) {
-    let message: string;
     if (axios.isAxiosError(err)) {
       const body = err.response?.data;
       const bodyStr = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : err.message;
-      message = `PDM API error ${err.response?.status ?? ''}: ${bodyStr}`.trim();
-    } else {
-      message = err instanceof Error ? err.message : 'Unknown error';
+
+      // If HyperGuest says "not found" the subscription is already gone on their side.
+      // Treat it as success and sync our local DB.
+      const isNotFound =
+        err.response?.status === 404 ||
+        bodyStr.toLowerCase().includes('not found') ||
+        bodyStr.includes('PDM.404') ||
+        bodyStr.includes('PDM.500');
+
+      if (isNotFound) {
+        console.warn(`[POST /api/subscriptions/${id}/unsubscribe] HG not found — marking disabled in DB`);
+        await updateDbStatus('disabled');
+        return NextResponse.json({
+          success: true,
+          data: null,
+          message: `Subscription ${id} was not found in HyperGuest — marked as disabled locally.`,
+        });
+      }
+
+      const message = `PDM API error ${err.response?.status ?? ''}: ${bodyStr}`.trim();
+      console.error(`[POST /api/subscriptions/${id}/unsubscribe]`, message);
+      return NextResponse.json({ success: false, data: null, error: message }, { status: 502 });
     }
 
+    const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[POST /api/subscriptions/${id}/unsubscribe]`, message);
-
-    return NextResponse.json(
-      { success: false, data: null, error: message },
-      { status: 502 }
-    );
+    return NextResponse.json({ success: false, data: null, error: message }, { status: 502 });
   }
 }
