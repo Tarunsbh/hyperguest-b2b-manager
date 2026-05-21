@@ -713,7 +713,7 @@ export default function BookingsPage() {
             icon={CalendarDays}
             label="Today"
             value={statsLoading ? 0 : (stats?.today ?? 0)}
-            variant="amber"
+            variant="orange"
             loading={statsLoading}
             index={3}
           />
